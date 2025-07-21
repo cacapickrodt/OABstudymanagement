@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,9 +6,9 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 
 
 ROOT_DIR = Path(__file__).parent
@@ -20,13 +20,56 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(title="Sistema de Planejamento de Estudos")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
 
-# Define Models
+# Define Models for Study Planning System
+class Disciplina(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    nome: str
+    horario_inicio: Optional[str] = None  # Format: "09:00"
+    horario_fim: Optional[str] = None     # Format: "10:30"
+    criado_em: datetime = Field(default_factory=datetime.utcnow)
+
+class DisciplinaUpdate(BaseModel):
+    horario_inicio: Optional[str] = None
+    horario_fim: Optional[str] = None
+
+class TarefaDiaria(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    horario: str                          # Format: "09:00"
+    descricao: str
+    concluida: bool = False
+
+class TarefaDiariaCreate(BaseModel):
+    horario: str
+    descricao: str
+
+class DesempenhoSemanal(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    semana_inicio: date
+    segunda: List[TarefaDiaria] = []
+    terca: List[TarefaDiaria] = []
+    quarta: List[TarefaDiaria] = []
+    quinta: List[TarefaDiaria] = []
+    sexta: List[TarefaDiaria] = []
+    sabado: List[TarefaDiaria] = []
+    domingo: List[TarefaDiaria] = []
+    criado_em: datetime = Field(default_factory=datetime.utcnow)
+
+class PlanoEstudos(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    nome: str
+    disciplinas_ids: List[str] = []
+    criado_em: datetime = Field(default_factory=datetime.utcnow)
+
+class PlanoEstudosCreate(BaseModel):
+    nome: str
+    disciplinas_ids: List[str] = []
+
 class StatusCheck(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     client_name: str
@@ -34,23 +77,6 @@ class StatusCheck(BaseModel):
 
 class StatusCheckCreate(BaseModel):
     client_name: str
-
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
 
 # Include the router in the main app
 app.include_router(api_router)
