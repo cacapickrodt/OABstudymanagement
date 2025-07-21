@@ -97,10 +97,11 @@ class StatusCheck(BaseModel):
 class StatusCheckCreate(BaseModel):
     client_name: str
 
-# Helper function to serialize datetime objects
+# Helper function to serialize datetime objects and MongoDB ObjectIds
 def serialize_obj(obj):
     if isinstance(obj, dict):
-        return {k: serialize_obj(v) for k, v in obj.items()}
+        # Remove MongoDB _id field and serialize other fields
+        return {k: serialize_obj(v) for k, v in obj.items() if k != '_id'}
     elif isinstance(obj, list):
         return [serialize_obj(item) for item in obj]
     elif isinstance(obj, datetime):
