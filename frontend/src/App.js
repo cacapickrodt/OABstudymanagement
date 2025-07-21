@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import "./App.css";
 import axios from "axios";
 
@@ -10,6 +10,8 @@ function App() {
   const [desempenhoSemanal, setDesempenhoSemanal] = useState(null);
   const [semanaAtual, setSemanaAtual] = useState(getCurrentWeekStart());
   const [loading, setLoading] = useState(false);
+  const [timers, setTimers] = useState({}); // Track timer states
+  const [resumoTempo, setResumoTempo] = useState([]); // Weekly time summary
   
   // Get current week start date (Monday)
   function getCurrentWeekStart() {
@@ -19,11 +21,70 @@ function App() {
     return new Date(today.setDate(diff)).toISOString().split('T')[0];
   }
 
+  // Format seconds to hours and minutes
+  const formatTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${minutes}m`;
+  };
+
   // Load disciplines on component mount
   useEffect(() => {
     loadDisciplinas();
     loadDesempenho();
+    loadResumoTempo();
   }, [semanaAtual]);
+
+  // Check timer status for all disciplines
+  const checkTimerStatus = useCallback(async () => {
+    if (disciplinas.length === 0) return;
+    
+    const timerPromises = disciplinas.map(async (disciplina) => {
+      try {
+        const response = await axios.get(`${API}/timer/status/${disciplina.id}`);
+        return { disciplinaId: disciplina.id, status: response.data };
+      } catch (error) {
+        console.error(`Erro ao verificar timer da disciplina ${disciplina.id}:`, error);
+        return { disciplinaId: disciplina.id, status: { ativo: false } };
+      }
+    });
+
+    const results = await Promise.all(timerPromises);
+    const newTimers = {};
+    
+    results.forEach(({ disciplinaId, status }) => {
+      newTimers[disciplinaId] = {
+        ativo: status.ativo,
+        duracaoAtual: status.duracao_atual_segundos || 0,
+        inicio: status.sessao?.inicio || null
+      };
+    });
+    
+    setTimers(newTimers);
+  }, [disciplinas]);
+
+  // Update timer display every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimers(prev => {
+        const updated = { ...prev };
+        Object.keys(updated).forEach(disciplinaId => {
+          if (updated[disciplinaId].ativo && updated[disciplinaId].inicio) {
+            const inicioTime = new Date(updated[disciplinaId].inicio);
+            const now = new Date();
+            updated[disciplinaId].duracaoAtual = Math.floor((now - inicioTime) / 1000);
+          }
+        });
+        return updated;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    checkTimerStatus();
+  }, [checkTimerStatus]);
 
   const loadDisciplinas = async () => {
     try {
@@ -46,6 +107,15 @@ function App() {
     }
   };
 
+  const loadResumoTempo = async () => {
+    try {
+      const response = await axios.get(`${API}/timer/resumo-semanal`);
+      setResumoTempo(response.data);
+    } catch (error) {
+      console.error('Erro ao carregar resumo de tempo:', error);
+    }
+  };
+
   const updateDisciplinaHorario = async (disciplinaId, horarioInicio, horarioFim) => {
     try {
       await axios.put(`${API}/disciplinas/${disciplinaId}`, {
@@ -60,6 +130,51 @@ function App() {
       ));
     } catch (error) {
       console.error('Erro ao atualizar horário:', error);
+    }
+  };
+
+  const iniciarTimer = async (disciplinaId) => {
+    try {
+      const response = await axios.post(`${API}/timer/iniciar`, {
+        disciplina_id: disciplinaId
+      });
+      
+      // Update timer state
+      setTimers(prev => ({
+        ...prev,
+        [disciplinaId]: {
+          ativo: true,
+          duracaoAtual: 0,
+          inicio: response.data.inicio
+        }
+      }));
+    } catch (error) {
+      console.error('Erro ao iniciar timer:', error);
+      alert('Erro ao iniciar cronômetro. Verifique se não há outro ativo para esta disciplina.');
+    }
+  };
+
+  const pararTimer = async (disciplinaId) => {
+    try {
+      const response = await axios.put(`${API}/timer/parar/${disciplinaId}`);
+      
+      // Update timer state
+      setTimers(prev => ({
+        ...prev,
+        [disciplinaId]: {
+          ativo: false,
+          duracaoAtual: 0,
+          inicio: null
+        }
+      }));
+
+      // Refresh weekly summary
+      loadResumoTempo();
+      
+      alert(`Cronômetro parado! Tempo estudado: ${response.data.duracao_formatada}`);
+    } catch (error) {
+      console.error('Erro ao parar timer:', error);
+      alert('Erro ao parar cronômetro.');
     }
   };
 
@@ -132,47 +247,87 @@ function App() {
             </div>
             
             <div className="space-y-4">
-              {disciplinas.map((disciplina) => (
-                <div key={disciplina.id} className="border border-gray-200 rounded-lg p-4">
-                  <h3 className="font-semibold text-gray-800 mb-3">
-                    {disciplina.nome}
-                  </h3>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Horário Início
-                      </label>
-                      <input
-                        type="time"
-                        value={disciplina.horario_inicio || ""}
-                        onChange={(e) => updateDisciplinaHorario(
-                          disciplina.id,
-                          e.target.value,
-                          disciplina.horario_fim
-                        )}
-                        className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
+              {disciplinas.map((disciplina) => {
+                const timer = timers[disciplina.id] || { ativo: false, duracaoAtual: 0 };
+                
+                return (
+                  <div key={disciplina.id} className="border border-gray-200 rounded-lg p-4">
+                    <h3 className="font-semibold text-gray-800 mb-3">
+                      {disciplina.nome}
+                    </h3>
                     
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Horário Fim
-                      </label>
-                      <input
-                        type="time"
-                        value={disciplina.horario_fim || ""}
-                        onChange={(e) => updateDisciplinaHorario(
-                          disciplina.id,
-                          disciplina.horario_inicio,
-                          e.target.value
-                        )}
-                        className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Horário Início
+                        </label>
+                        <input
+                          type="time"
+                          value={disciplina.horario_inicio || ""}
+                          onChange={(e) => updateDisciplinaHorario(
+                            disciplina.id,
+                            e.target.value,
+                            disciplina.horario_fim
+                          )}
+                          className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Horário Fim
+                        </label>
+                        <input
+                          type="time"
+                          value={disciplina.horario_fim || ""}
+                          onChange={(e) => updateDisciplinaHorario(
+                            disciplina.id,
+                            disciplina.horario_inicio,
+                            e.target.value
+                          )}
+                          className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Cronometer Section */}
+                    <div className="border-t pt-4 mt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">Cronômetro:</span>
+                        <span className={`text-lg font-mono ${timer.ativo ? 'text-green-600' : 'text-gray-400'}`}>
+                          {formatTime(timer.duracaoAtual)}
+                        </span>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => iniciarTimer(disciplina.id)}
+                          disabled={timer.ativo}
+                          className={`flex-1 py-2 px-4 rounded text-white font-medium ${
+                            timer.ativo 
+                              ? 'bg-gray-400 cursor-not-allowed' 
+                              : 'bg-green-600 hover:bg-green-700'
+                          }`}
+                        >
+                          {timer.ativo ? 'Em andamento' : 'Iniciar'}
+                        </button>
+                        
+                        <button
+                          onClick={() => pararTimer(disciplina.id)}
+                          disabled={!timer.ativo}
+                          className={`flex-1 py-2 px-4 rounded text-white font-medium ${
+                            !timer.ativo 
+                              ? 'bg-gray-400 cursor-not-allowed' 
+                              : 'bg-red-600 hover:bg-red-700'
+                          }`}
+                        >
+                          Parar
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -195,6 +350,21 @@ function App() {
                 </button>
               </div>
             </div>
+
+            {/* Weekly Time Summary */}
+            {resumoTempo.length > 0 && (
+              <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+                <h3 className="font-bold text-blue-800 mb-3">Resumo Semanal - Tempo de Estudo</h3>
+                <div className="space-y-2">
+                  {resumoTempo.map((item) => (
+                    <div key={item.disciplina_id} className="flex justify-between items-center text-sm">
+                      <span className="text-gray-700">{item.nome_disciplina}:</span>
+                      <span className="font-mono text-blue-600">{formatTime(item.total_segundos)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="space-y-6">
               {diasSemana.map(({ key, label }) => (
