@@ -242,27 +242,137 @@ async def create_or_update_desempenho(desempenho: DesempenhoSemanal):
     
     return {"message": "Desempenho semanal salvo com sucesso"}
 
-# Planos de Estudo endpoints
-@api_router.get("/planos", response_model=List[PlanoEstudos])
-async def get_planos_estudos():
-    """Buscar todos os planos de estudo"""
-    planos = await db.planos_estudos.find().to_list(1000)
-    return [PlanoEstudos(**serialize_obj(plano)) for plano in planos]
+# Timer/Cronometer endpoints
+@api_router.post("/timer/iniciar", response_model=SessaoEstudo)
+async def iniciar_cronometro(sessao_data: SessaoEstudoCreate):
+    """Iniciar cronômetro de estudo para uma disciplina"""
+    # Check if there's already an active session for this discipline
+    sessao_ativa = await db.sessoes_estudo.find_one({
+        "disciplina_id": sessao_data.disciplina_id,
+        "ativa": True
+    })
+    
+    if sessao_ativa:
+        raise HTTPException(status_code=400, detail="Já existe uma sessão ativa para esta disciplina")
+    
+    # Create new study session
+    nova_sessao = SessaoEstudo(**sessao_data.dict(), inicio=datetime.utcnow())
+    await db.sessoes_estudo.insert_one(nova_sessao.dict())
+    return nova_sessao
 
-@api_router.post("/planos", response_model=PlanoEstudos)
-async def create_plano_estudos(plano: PlanoEstudosCreate):
-    """Criar novo plano de estudos"""
-    novo_plano = PlanoEstudos(**plano.dict())
-    await db.planos_estudos.insert_one(novo_plano.dict())
-    return novo_plano
+@api_router.put("/timer/parar/{disciplina_id}")
+async def parar_cronometro(disciplina_id: str):
+    """Parar cronômetro de estudo para uma disciplina"""
+    # Find active session
+    sessao_ativa = await db.sessoes_estudo.find_one({
+        "disciplina_id": disciplina_id,
+        "ativa": True
+    })
+    
+    if not sessao_ativa:
+        raise HTTPException(status_code=404, detail="Nenhuma sessão ativa encontrada para esta disciplina")
+    
+    # Calculate duration and stop session
+    fim = datetime.utcnow()
+    inicio = datetime.fromisoformat(sessao_ativa["inicio"].replace('Z', '+00:00')) if isinstance(sessao_ativa["inicio"], str) else sessao_ativa["inicio"]
+    duracao_segundos = int((fim - inicio).total_seconds())
+    
+    await db.sessoes_estudo.update_one(
+        {"id": sessao_ativa["id"]},
+        {
+            "$set": {
+                "fim": fim,
+                "duracao_segundos": duracao_segundos,
+                "ativa": False
+            }
+        }
+    )
+    
+    return {
+        "message": "Cronômetro parado com sucesso",
+        "duracao_segundos": duracao_segundos,
+        "duracao_formatada": f"{duracao_segundos // 3600}h {(duracao_segundos % 3600) // 60}m"
+    }
 
-@api_router.get("/planos/{plano_id}", response_model=PlanoEstudos)
-async def get_plano_estudos(plano_id: str):
-    """Buscar plano de estudos por ID"""
-    plano = await db.planos_estudos.find_one({"id": plano_id})
-    if not plano:
-        raise HTTPException(status_code=404, detail="Plano de estudos não encontrado")
-    return PlanoEstudos(**serialize_obj(plano))
+@api_router.get("/timer/status/{disciplina_id}")
+async def status_cronometro(disciplina_id: str):
+    """Verificar status do cronômetro para uma disciplina"""
+    sessao_ativa = await db.sessoes_estudo.find_one({
+        "disciplina_id": disciplina_id,
+        "ativa": True
+    })
+    
+    if not sessao_ativa:
+        return {"ativo": False, "sessao": None}
+    
+    # Calculate current duration
+    inicio = datetime.fromisoformat(sessao_ativa["inicio"].replace('Z', '+00:00')) if isinstance(sessao_ativa["inicio"], str) else sessao_ativa["inicio"]
+    duracao_atual = int((datetime.utcnow() - inicio).total_seconds())
+    
+    return {
+        "ativo": True,
+        "sessao": serialize_obj(sessao_ativa),
+        "duracao_atual_segundos": duracao_atual
+    }
+
+@api_router.get("/timer/resumo-semanal", response_model=List[ResumoSemanalTempo])
+async def resumo_tempo_semanal():
+    """Obter resumo do tempo estudado por disciplina na semana atual"""
+    # Calculate current week start (Monday)
+    today = datetime.utcnow().date()
+    days_since_monday = today.weekday()
+    week_start = today - timedelta(days=days_since_monday)
+    week_end = week_start + timedelta(days=6)
+    
+    # Convert to datetime for comparison
+    week_start_dt = datetime.combine(week_start, datetime.min.time())
+    week_end_dt = datetime.combine(week_end, datetime.max.time())
+    
+    # Aggregate time by discipline for current week
+    pipeline = [
+        {
+            "$match": {
+                "ativa": False,  # Only completed sessions
+                "inicio": {
+                    "$gte": week_start_dt,
+                    "$lte": week_end_dt
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": "$disciplina_id",
+                "total_segundos": {"$sum": "$duracao_segundos"}
+            }
+        }
+    ]
+    
+    resultados = await db.sessoes_estudo.aggregate(pipeline).to_list(1000)
+    
+    # Get discipline names and format results
+    resumo_final = []
+    for resultado in resultados:
+        disciplina = await db.disciplinas.find_one({"id": resultado["_id"]})
+        if disciplina:
+            total_segundos = resultado["total_segundos"]
+            total_horas = total_segundos / 3600
+            total_minutos = total_segundos // 60
+            
+            resumo_final.append(ResumoSemanalTempo(
+                disciplina_id=resultado["_id"],
+                nome_disciplina=disciplina["nome"],
+                total_segundos=total_segundos,
+                total_horas=round(total_horas, 2),
+                total_minutos=total_minutos
+            ))
+    
+    return resumo_final
+
+@api_router.get("/timer/sessoes/{disciplina_id}")
+async def get_sessoes_disciplina(disciplina_id: str):
+    """Buscar todas as sessões de estudo de uma disciplina"""
+    sessoes = await db.sessoes_estudo.find({"disciplina_id": disciplina_id}).sort("inicio", -1).to_list(1000)
+    return [serialize_obj(sessao) for sessao in sessoes]
 
 # Include the router in the main app
 app.include_router(api_router)
