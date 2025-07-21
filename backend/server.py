@@ -48,6 +48,25 @@ class TarefaDiariaCreate(BaseModel):
     horario: str
     descricao: str
 
+class SessaoEstudo(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    disciplina_id: str
+    inicio: datetime
+    fim: Optional[datetime] = None
+    duracao_segundos: Optional[int] = None
+    ativa: bool = True
+    criado_em: datetime = Field(default_factory=datetime.utcnow)
+
+class SessaoEstudoCreate(BaseModel):
+    disciplina_id: str
+
+class ResumoSemanalTempo(BaseModel):
+    disciplina_id: str
+    nome_disciplina: str
+    total_segundos: int
+    total_horas: float
+    total_minutos: int
+
 class DesempenhoSemanal(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     semana_inicio: date
