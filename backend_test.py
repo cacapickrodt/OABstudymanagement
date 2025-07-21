@@ -158,6 +158,12 @@ class BackendTester:
             return False
         
         try:
+            # First, ensure no active session exists by trying to stop any existing one
+            try:
+                self.session.put(f"{self.base_url}/timer/parar/{self.disciplina_test_id}")
+            except:
+                pass  # Ignore if no session to stop
+            
             timer_data = {
                 "disciplina_id": self.disciplina_test_id
             }
