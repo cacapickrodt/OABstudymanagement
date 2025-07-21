@@ -285,11 +285,22 @@ class BackendTester:
             return False
         
         try:
-            # Try to start another session for the same discipline
+            # First start a new session
             timer_data = {
                 "disciplina_id": self.disciplina_test_id
             }
             
+            start_response = self.session.post(
+                f"{self.base_url}/timer/iniciar",
+                json=timer_data
+            )
+            
+            if start_response.status_code != 200:
+                self.log_test("Overlapping Sessions Prevention", False, 
+                            f"Could not start initial session: {start_response.status_code}")
+                return False
+            
+            # Now try to start another session for the same discipline
             response = self.session.post(
                 f"{self.base_url}/timer/iniciar",
                 json=timer_data
@@ -300,6 +311,8 @@ class BackendTester:
                 error_msg = response.json().get("detail", "")
                 if "já existe uma sessão ativa" in error_msg.lower():
                     self.log_test("Overlapping Sessions Prevention", True, "Correctly prevents overlapping sessions")
+                    # Clean up by stopping the session
+                    self.session.put(f"{self.base_url}/timer/parar/{self.disciplina_test_id}")
                     return True
                 else:
                     self.log_test("Overlapping Sessions Prevention", False, f"Wrong error message: {error_msg}")
