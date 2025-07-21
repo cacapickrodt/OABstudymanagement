@@ -220,7 +220,7 @@ async def get_desempenho_by_week(semana_inicio: str):
     if not desempenho:
         # Create new performance week if it doesn't exist
         new_desempenho = DesempenhoSemanal(semana_inicio=week_date)
-        await db.desempenho_semanal.insert_one(new_desempenho.dict())
+        await db.desempenho_semanal.insert_one(serialize_obj(new_desempenho.dict()))
         return serialize_obj(new_desempenho.dict())
     
     return serialize_obj(desempenho)
