@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/OABstudymanagement/static/css/main.80959fb6.css",
+    "main.js": "/OABstudymanagement/static/js/main.be00f6ba.js",
+    "index.html": "/OABstudymanagement/index.html",
+    "main.80959fb6.css.map": "/OABstudymanagement/static/css/main.80959fb6.css.map",
+    "main.be00f6ba.js.map": "/OABstudymanagement/static/js/main.be00f6ba.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.80959fb6.css",
+    "static/js/main.be00f6ba.js"
+  ]
+}
